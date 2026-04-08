@@ -5,7 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from google.oauth2.service_account import Credentials
-import pandas as pd # VIBECODER UPDATE: Thêm thư viện xử lý bảng tính
+import pandas as pd
 
 # ==========================================
 # CẤU HÌNH GIAO DIỆN STREAMLIT
@@ -111,10 +111,53 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
         st.error(f"❌ Lỗi khi xử lý tab `{invoice_number}`: {e}")
         return None, None
 
-def write_total_discount(sh, invoice_number, total_discount):
+def write_total_discount(sh, invoice_number, total_discount, item_counts, discount_map):
+    """
+    VIBECODER UPDATE: Ghi nguyên một bảng chi tiết vào Sheet thay vì 1 dòng
+    """
     try:
         ws_total = sh.worksheet(SHEET_TOTAL_DISCOUNT)
-        ws_total.append_row([invoice_number, total_discount])
+        
+        rows_to_append = []
+        is_first_row = True
+        total_qty = 0
+        
+        # 1. Tạo các dòng chi tiết cho từng Sản phẩm
+        for code, qty in item_counts.items():
+            unit_price = discount_map.get(code, 0.0)
+            line_total = qty * unit_price
+            total_qty += qty
+            
+            # Chỉ điền Invoice Number ở dòng đầu tiên của cụm này
+            inv_val = invoice_number if is_first_row else ""
+            
+            row = [
+                inv_val,                  # Cột A: Invoice number
+                "",                       # Cột B: Total (Để trống ở dòng chi tiết)
+                code,                     # Cột C: Mã SP
+                qty,                      # Cột D: Số Lượng
+                f"${unit_price:.2f}",     # Cột E: Đơn Giá
+                f"${line_total:.2f}"      # Cột F: Thành Tiền
+            ]
+            rows_to_append.append(row)
+            is_first_row = False
+            
+        # 2. Tạo dòng TỔNG CỘNG chốt lại ở dưới cùng
+        summary_row = [
+            "",                           # Cột A: (Trống)
+            f"${total_discount:.2f}",     # Cột B: Total Discount của cả Invoice
+            "TỔNG CỘNG",                  # Cột C: Mã SP
+            total_qty,                    # Cột D: Tổng số lượng
+            "-",                          # Cột E: Đơn giá
+            f"${total_discount:.2f}"      # Cột F: Tổng tiền
+        ]
+        rows_to_append.append(summary_row)
+        
+        # Thêm 1 dòng trống cho thoáng (tách biệt với Invoice tiếp theo)
+        rows_to_append.append(["", "", "", "", "", ""])
+        
+        # 3. Đẩy toàn bộ danh sách dòng này lên Google Sheet cùng lúc
+        ws_total.append_rows(rows_to_append)
         return True
     except Exception as e:
         st.error(f"❌ Lỗi khi ghi vào sheet {SHEET_TOTAL_DISCOUNT}: {e}")
@@ -209,8 +252,10 @@ def main():
             total_discount, item_counts = calculate_invoice_discount(sh, invoice_number, discount_map)
             
             if total_discount is not None:
-                st.write(f"📝 Đang lưu kết quả `${total_discount:.2f}` vào `{SHEET_TOTAL_DISCOUNT}`...")
-                success_write = write_total_discount(sh, invoice_number, total_discount)
+                st.write(f"📝 Đang lưu kết quả chi tiết vào `{SHEET_TOTAL_DISCOUNT}`...")
+                
+                # UPDATE: Truyền thêm item_counts và discount_map vào hàm ghi file
+                success_write = write_total_discount(sh, invoice_number, total_discount, item_counts, discount_map)
                 
                 if success_write:
                     st.write(f"📩 Đang gửi email báo cáo...")
@@ -228,11 +273,9 @@ def main():
                             st.success(f"✅ Đã ghi thành công! Invoice **{invoice_number}** có tổng discount là **${total_discount:.2f}**")
                             st.info(f"📧 Đã gửi báo cáo chi tiết đến {FIXED_TO_EMAIL} (kèm CC).")
                             
-                            # 💡 VIBECODER UPDATE: HIỂN THỊ BẢNG TÍNH CHI TIẾT SAU KHI CHẠY XONG
                             st.markdown("---")
-                            st.subheader("📊 Bảng Kê Chi Tiết Khấu Trừ")
+                            st.subheader("📊 Bảng Kê Chi Tiết Khấu Trừ (Đã ghi vào Sheet)")
                             
-                            # Tạo dữ liệu cho bảng
                             table_data = []
                             for code, qty in item_counts.items():
                                 unit_price = discount_map.get(code, 0.0)
@@ -244,10 +287,7 @@ def main():
                                     "Thành Tiền": f"${line_total:.2f}"
                                 })
                             
-                            # Hiển thị bằng Pandas DataFrame (Giao diện bảng rất đẹp trên Streamlit)
                             df = pd.DataFrame(table_data)
-                            
-                            # Thêm dòng tổng cộng vào cuối bảng cho "uy tín"
                             total_row = pd.DataFrame([{
                                 "Mã Sản Phẩm": "TỔNG CỘNG", 
                                 "Số Lượng": sum(item_counts.values()), 
@@ -262,7 +302,7 @@ def main():
                             
                     except KeyError:
                         status.update(label=f"Ghi sổ thành công, nhưng thiếu cấu hình Email!", state="warning", expanded=False)
-                        st.error("❌ Chưa cấu hình [email_config] trong Streamlit Secrets. Dữ liệu đã được ghi, nhưng chưa gửi được email.")
+                        st.error("❌ Chưa cấu hình [email_config] trong Streamlit Secrets. Dữ liệu bảng tính đã được ghi, nhưng chưa gửi được email.")
                 else:
                     status.update(label="Ghi dữ liệu thất bại!", state="error")
             else:
