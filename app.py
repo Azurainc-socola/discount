@@ -17,7 +17,7 @@ st.set_page_config(page_title="Azura Discount Calculator", page_icon="💰", lay
 # CẤU HÌNH KHÁCH HÀNG & HẰNG SỐ
 # ==========================================
 CLIENT_SHEETS = {
-    "UID": "1DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
+    "UID": "DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
     "JFT": "1KefQd0dt7R0sarZqVAlq0p-p00Bk9eQLl_uWNkAV78o",
     "Welast": "1zhzPVsrvGKOZeIuFe-6VszV50ZBzfeiB2TUaa6vxSQ4",
     "Husble": "1paJKBq8oAwOl-gAMUzFZ3JdkbEdv9b7fEnGQ-pbrzfo"
@@ -129,7 +129,7 @@ def write_total_discount(sh, invoice_number, total_discount, item_counts, discou
         rows_to_append.append(["", f"${total_discount:.2f}", "TỔNG CỘNG", total_qty, "-", f"${total_discount:.2f}"])
         rows_to_append.append(["", "", "", "", "", ""]) 
         
-        # FIX LỆCH CỘT: Ép dải bảng bắt đầu từ A
+        # FIX LỆCH CỘT: Ép dải bảng bắt đầu từ A1
         ws_total.append_rows(rows_to_append, value_input_option="USER_ENTERED", table_range="A1")
         return len(rows_to_append)
     except Exception as e:
@@ -207,7 +207,7 @@ def main():
             selected_client_name = st.selectbox("👥 Chọn Khách hàng:", options=list(CLIENT_SHEETS.keys()))
             invoice_number = st.text_input("👉 Nhập Invoice Number:", placeholder="Ví dụ: 412")
         with col2:
-            # 💡 VIBECODER UPDATE: OPTION GỬI EMAIL
+            # TÙY CHỌN GỬI EMAIL
             is_send_email = st.checkbox("📩 Tự động gửi Email báo cáo", value=True)
             st.info(f"**Người nhận:** {FIXED_TO_EMAIL}")
             submit_btn = st.form_submit_button("⚙️ Chạy Quy Trình", use_container_width=True)
@@ -232,7 +232,9 @@ def main():
                 ws_t = sh.worksheet(SHEET_TOTAL_DISCOUNT)
                 if inv_no in [str(v).strip() for v in ws_t.col_values(1)]:
                     status.update(label="Trùng lặp!", state="error")
-                    st.error(f"❌ Invoice `{inv_no}` đã tồn tại!"); st.link_button("Mở Sheet kiểm tra", s_url); st.stop()
+                    st.error(f"❌ Invoice `{inv_no}` đã tồn tại!")
+                    st.link_button("Mở Sheet kiểm tra", s_url)
+                    st.stop()
             except gspread.exceptions.WorksheetNotFound: pass
             
             # 2. NẠP GIÁ & TÍNH TOÁN
@@ -248,7 +250,8 @@ def main():
                         s_em = st.secrets["email_config"]["sender_email"]
                         s_pw = st.secrets["email_config"]["app_password"]
                         send_alert_email(s_em, s_pw, selected_client_name, inv_no, m_codes, s_url)
-                    st.link_button("Bổ sung giá ngay", s_url); st.stop()
+                    st.link_button("Bổ sung giá ngay", s_url)
+                    st.stop()
 
                 # 4. GHI SỔ
                 n_rows = write_total_discount(sh, inv_no, total_d, i_counts, d_map)
@@ -263,8 +266,17 @@ def main():
                     st.success(f"✅ Đã ghi thành công vào `{selected_client_name}`")
                     st.link_button("🔗 Mở Google Sheet", s_url)
                     
-                    # Hiện bảng kê
-                    df = pd.DataFrame([{"Mã SP": c, "SL": q, "Đơn Giá": f"${d_map[c]:.2f}", "Thành Tiền": f"${q*d_map[c]:.2f}"} for c in i_counts])
+                    # 💡 VIBECODER FIX: HIỂN THỊ BẢNG KÊ CHUẨN XÁC
+                    st.markdown("---")
+                    table_data = []
+                    for c, q in i_counts.items():
+                        table_data.append({
+                            "Mã SP": c, 
+                            "Số Lượng": q, 
+                            "Đơn Giá": f"${d_map[c]:.2f}", 
+                            "Thành Tiền": f"${q * d_map[c]:.2f}"
+                        })
+                    df = pd.DataFrame(table_data)
                     st.dataframe(df, use_container_width=True, hide_index=True)
                     st.balloons()
 
