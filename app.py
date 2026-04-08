@@ -5,6 +5,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from google.oauth2.service_account import Credentials
+import pandas as pd # VIBECODER UPDATE: Thêm thư viện xử lý bảng tính
 
 # ==========================================
 # CẤU HÌNH GIAO DIỆN STREAMLIT
@@ -26,7 +27,7 @@ SHEET_TOTAL_DISCOUNT = "Total discount"
 
 # CỐ ĐỊNH EMAIL NHẬN BÁO CÁO
 FIXED_TO_EMAIL = "mibi9500@gmail.com"
-FIXED_CC_EMAILS = "namhoang243@gmail.com,quynhluong@azurainc.com"
+FIXED_CC_EMAILS = "namhoang243@gmail.com, quynhluong@azurainc.com"
 
 # ==========================================
 # CÁC HÀM XỬ LÝ LÕI
@@ -120,7 +121,6 @@ def write_total_discount(sh, invoice_number, total_discount):
         return False
 
 def send_email_report(sender_email, sender_password, client_name, invoice_number, total_discount, item_counts):
-    """Hàm gửi email báo cáo chi tiết hỗ trợ To và CC"""
     try:
         items_html = ""
         for code, qty in item_counts.items():
@@ -152,7 +152,6 @@ def send_email_report(sender_email, sender_password, client_name, invoice_number
         msg['Subject'] = f"[Azura Báo Cáo] Invoice {invoice_number} - Khách {client_name} - Discount: ${total_discount:.2f}"
         msg.attach(MIMEText(html_content, 'html'))
 
-        # Chuẩn bị danh sách tổng hợp để gửi qua SMTP (Gộp To và CC lại)
         all_recipients = [FIXED_TO_EMAIL] + [email.strip() for email in FIXED_CC_EMAILS.split(',')]
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -180,7 +179,6 @@ def main():
             selected_client_name = st.selectbox("👥 Chọn Khách hàng:", options=list(CLIENT_SHEETS.keys()))
             invoice_number = st.text_input("👉 Nhập Invoice Number:", placeholder="Ví dụ: 412")
         with col2:
-            # Giao diện thông báo người nhận thay vì ô nhập liệu
             st.info(f"**📧 Email tự động gửi đến:**\n\n**To:** {FIXED_TO_EMAIL}\n\n**CC:** {FIXED_CC_EMAILS}")
             st.markdown("<br>", unsafe_allow_html=True)
             submit_btn = st.form_submit_button("⚙️ Tính Toán, Ghi Sổ & Gửi Email", use_container_width=True)
@@ -229,7 +227,39 @@ def main():
                             status.update(label=f"Hoàn tất! Đã ghi sổ và gửi Email.", state="complete", expanded=False)
                             st.success(f"✅ Đã ghi thành công! Invoice **{invoice_number}** có tổng discount là **${total_discount:.2f}**")
                             st.info(f"📧 Đã gửi báo cáo chi tiết đến {FIXED_TO_EMAIL} (kèm CC).")
+                            
+                            # 💡 VIBECODER UPDATE: HIỂN THỊ BẢNG TÍNH CHI TIẾT SAU KHI CHẠY XONG
+                            st.markdown("---")
+                            st.subheader("📊 Bảng Kê Chi Tiết Khấu Trừ")
+                            
+                            # Tạo dữ liệu cho bảng
+                            table_data = []
+                            for code, qty in item_counts.items():
+                                unit_price = discount_map.get(code, 0.0)
+                                line_total = qty * unit_price
+                                table_data.append({
+                                    "Mã Sản Phẩm": code,
+                                    "Số Lượng": qty,
+                                    "Đơn Giá Discount": f"${unit_price:.2f}",
+                                    "Thành Tiền": f"${line_total:.2f}"
+                                })
+                            
+                            # Hiển thị bằng Pandas DataFrame (Giao diện bảng rất đẹp trên Streamlit)
+                            df = pd.DataFrame(table_data)
+                            
+                            # Thêm dòng tổng cộng vào cuối bảng cho "uy tín"
+                            total_row = pd.DataFrame([{
+                                "Mã Sản Phẩm": "TỔNG CỘNG", 
+                                "Số Lượng": sum(item_counts.values()), 
+                                "Đơn Giá Discount": "-", 
+                                "Thành Tiền": f"${total_discount:.2f}"
+                            }])
+                            df = pd.concat([df, total_row], ignore_index=True)
+                            
+                            st.dataframe(df, use_container_width=True, hide_index=True)
+                            
                             st.balloons()
+                            
                     except KeyError:
                         status.update(label=f"Ghi sổ thành công, nhưng thiếu cấu hình Email!", state="warning", expanded=False)
                         st.error("❌ Chưa cấu hình [email_config] trong Streamlit Secrets. Dữ liệu đã được ghi, nhưng chưa gửi được email.")
