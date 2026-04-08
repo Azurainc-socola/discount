@@ -28,7 +28,7 @@ SHEET_TOTAL_DISCOUNT = "Total discount"
 
 # CỐ ĐỊNH EMAIL NHẬN BÁO CÁO
 FIXED_TO_EMAIL = "mibi9500@gmail.com"
-FIXED_CC_EMAILS = "namhoang243@gmail.com, quynhluong@azurainc.com"
+FIXED_CC_EMAILS = "namhoang243@gmail.com,quynhluong@azurainc.com"
 
 # ==========================================
 # CÁC HÀM XỬ LÝ LÕI
