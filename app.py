@@ -1,6 +1,9 @@
 import streamlit as st
 import gspread
 import re
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from google.oauth2.service_account import Credentials
 
 # ==========================================
@@ -21,12 +24,15 @@ CLIENT_SHEETS = {
 SHEET_PRODUCT_CODE = "Productcode"
 SHEET_TOTAL_DISCOUNT = "Total discount"
 
+# CỐ ĐỊNH EMAIL NHẬN BÁO CÁO
+FIXED_TO_EMAIL = "mibi9500@gmail.com"
+FIXED_CC_EMAILS = "namhoang243@gmail.com,quynhluong@azurainc.com"
+
 # ==========================================
 # CÁC HÀM XỬ LÝ LÕI
 # ==========================================
 @st.cache_resource(show_spinner=False)
 def authenticate_google_sheets():
-    """Xác thực Google Sheets thông qua Streamlit Secrets cho Public App"""
     try:
         scopes = [
             'https://www.googleapis.com/auth/drive',
@@ -36,7 +42,7 @@ def authenticate_google_sheets():
         creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"❌ Lỗi xác thực Google API (Kiểm tra lại cấu hình Secrets): {e}")
+        st.error(f"❌ Lỗi xác thực Google API: {e}")
         st.stop()
 
 def parse_discount_price(price_str):
@@ -75,6 +81,8 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
             
         rows = ws_invoice.get_all_values()[1:]
         total_discount = 0.0
+        item_counts = {}
+        
         item_pattern = re.compile(r'^(\d+)[xX](.+)$')
         
         for row in rows:
@@ -85,15 +93,22 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
                 if match:
                     qty = int(match.group(1))
                     product_code = match.group(2).strip()
+                    
                     price = discount_map.get(product_code, 0.0)
                     total_discount += (qty * price)
-        return total_discount
+                    
+                    if product_code in item_counts:
+                        item_counts[product_code] += qty
+                    else:
+                        item_counts[product_code] = qty
+                        
+        return total_discount, item_counts
     except gspread.exceptions.WorksheetNotFound:
-        st.error(f"❌ Không tìm thấy tab nào có tên là `{invoice_number}` trong Sheet của khách hàng này.")
-        return None
+        st.error(f"❌ Không tìm thấy tab `{invoice_number}` trong Sheet của khách hàng này.")
+        return None, None
     except Exception as e:
         st.error(f"❌ Lỗi khi xử lý tab `{invoice_number}`: {e}")
-        return None
+        return None, None
 
 def write_total_discount(sh, invoice_number, total_discount):
     try:
@@ -104,68 +119,120 @@ def write_total_discount(sh, invoice_number, total_discount):
         st.error(f"❌ Lỗi khi ghi vào sheet {SHEET_TOTAL_DISCOUNT}: {e}")
         return False
 
+def send_email_report(sender_email, sender_password, client_name, invoice_number, total_discount, item_counts):
+    """Hàm gửi email báo cáo chi tiết hỗ trợ To và CC"""
+    try:
+        items_html = ""
+        for code, qty in item_counts.items():
+            items_html += f"<li><b>{code}</b>: {qty} cái</li>"
+
+        html_content = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <h2 style="color: #2E86C1;">Báo Cáo Khấu Trừ Azura - Khách Hàng {client_name}</h2>
+            <p>Hệ thống vừa tính toán và ghi sổ thành công cho <b>Invoice {invoice_number}</b>.</p>
+            
+            <h3 style="color: #D35400;">💰 Tổng Discount: ${total_discount:.2f}</h3>
+            
+            <h4>📦 Chi tiết Items (Tổng hợp):</h4>
+            <ul>
+                {items_html}
+            </ul>
+            
+            <hr>
+            <p style="font-size: 12px; color: #7f8c8d;"><i>Email này được gửi tự động từ hệ thống Azura VibeCoder. Vui lòng không trả lời trực tiếp.</i></p>
+        </body>
+        </html>
+        """
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = FIXED_TO_EMAIL
+        msg['Cc'] = FIXED_CC_EMAILS
+        msg['Subject'] = f"[Azura Báo Cáo] Invoice {invoice_number} - Khách {client_name} - Discount: ${total_discount:.2f}"
+        msg.attach(MIMEText(html_content, 'html'))
+
+        # Chuẩn bị danh sách tổng hợp để gửi qua SMTP (Gộp To và CC lại)
+        all_recipients = [FIXED_TO_EMAIL] + [email.strip() for email in FIXED_CC_EMAILS.split(',')]
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, all_recipients, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        st.error(f"⚠️ Không thể gửi email báo cáo: {e}")
+        return False
+
 # ==========================================
 # UI & LUỒNG TƯƠNG TÁC CHÍNH
 # ==========================================
 def main():
     st.title("🚀 Azura Vibe - Cập Nhật Khấu Trừ")
-    st.markdown("Chọn Khách hàng và nhập số Invoice bên dưới để tự động tính tổng Discount và ghi sổ.")
+    st.markdown("Chọn Khách hàng và nhập số Invoice bên dưới để tính toán, ghi sổ và gửi báo cáo.")
     
-    # Xác thực Google một lần
     gc = authenticate_google_sheets()
 
-    # Form nhập liệu
     with st.form("invoice_form"):
-        # 1. Dropdown chọn Khách hàng
-        selected_client_name = st.selectbox(
-            "👥 Chọn Khách hàng (Sheet cần thao tác):", 
-            options=list(CLIENT_SHEETS.keys())
-        )
-        
-        # 2. Input Invoice
-        invoice_number = st.text_input("👉 Nhập Invoice Number (VD: 412):", placeholder="Ví dụ: 412")
-        
-        # 3. Nút submit
-        submit_btn = st.form_submit_button("⚙️ Tính Toán & Ghi Sổ", use_container_width=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_client_name = st.selectbox("👥 Chọn Khách hàng:", options=list(CLIENT_SHEETS.keys()))
+            invoice_number = st.text_input("👉 Nhập Invoice Number:", placeholder="Ví dụ: 412")
+        with col2:
+            # Giao diện thông báo người nhận thay vì ô nhập liệu
+            st.info(f"**📧 Email tự động gửi đến:**\n\n**To:** {FIXED_TO_EMAIL}\n\n**CC:** {FIXED_CC_EMAILS}")
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_btn = st.form_submit_button("⚙️ Tính Toán, Ghi Sổ & Gửi Email", use_container_width=True)
 
-    # Xử lý Logic sau khi bấm nút
     if submit_btn:
         invoice_number = invoice_number.strip()
         
         if not invoice_number:
-            st.warning("⚠️ Vui lòng nhập mã Invoice trước khi chạy!")
+            st.warning("⚠️ Vui lòng nhập mã Invoice!")
             return
 
-        # Lấy ID Sheet dựa trên tên khách hàng đã chọn
         selected_sheet_id = CLIENT_SHEETS[selected_client_name]
 
         with st.status(f"Đang xử lý Invoice {invoice_number} cho {selected_client_name}...", expanded=True) as status:
-            # Mở đúng Sheet của Khách hàng
             try:
                 sh = gc.open_by_key(selected_sheet_id)
             except Exception as e:
                 status.update(label="Lỗi kết nối Sheet!", state="error")
-                st.error(f"❌ Không thể mở Google Sheet của '{selected_client_name}'. Vui lòng kiểm tra lại ID hoặc quyền truy cập.")
                 st.stop()
 
             st.write(f"🔍 Đang nạp bảng giá từ `{SHEET_PRODUCT_CODE}`...")
             discount_map = get_product_discount_map(sh)
-            
             if discount_map is None:
                 status.update(label="Xử lý thất bại!", state="error")
                 return
             
-            st.write(f"⚙️ Đang quét và tính tiền các items trong sheet `{invoice_number}`...")
-            total_discount = calculate_invoice_discount(sh, invoice_number, discount_map)
+            st.write(f"⚙️ Đang quét và tổng hợp items trong sheet `{invoice_number}`...")
+            total_discount, item_counts = calculate_invoice_discount(sh, invoice_number, discount_map)
             
             if total_discount is not None:
                 st.write(f"📝 Đang lưu kết quả `${total_discount:.2f}` vào `{SHEET_TOTAL_DISCOUNT}`...")
-                success = write_total_discount(sh, invoice_number, total_discount)
+                success_write = write_total_discount(sh, invoice_number, total_discount)
                 
-                if success:
-                    status.update(label=f"Hoàn tất Invoice {invoice_number}!", state="complete", expanded=False)
-                    st.success(f"✅ Đã ghi thành công! Tổng discount cho Invoice **{invoice_number}** của **{selected_client_name}** là **${total_discount:.2f}**")
-                    st.balloons()
+                if success_write:
+                    st.write(f"📩 Đang gửi email báo cáo...")
+                    try:
+                        sender_email = st.secrets["email_config"]["sender_email"]
+                        sender_password = st.secrets["email_config"]["app_password"]
+                        
+                        email_sent = send_email_report(
+                            sender_email, sender_password, selected_client_name, 
+                            invoice_number, total_discount, item_counts
+                        )
+                        
+                        if email_sent:
+                            status.update(label=f"Hoàn tất! Đã ghi sổ và gửi Email.", state="complete", expanded=False)
+                            st.success(f"✅ Đã ghi thành công! Invoice **{invoice_number}** có tổng discount là **${total_discount:.2f}**")
+                            st.info(f"📧 Đã gửi báo cáo chi tiết đến {FIXED_TO_EMAIL} (kèm CC).")
+                            st.balloons()
+                    except KeyError:
+                        status.update(label=f"Ghi sổ thành công, nhưng thiếu cấu hình Email!", state="warning", expanded=False)
+                        st.error("❌ Chưa cấu hình [email_config] trong Streamlit Secrets. Dữ liệu đã được ghi, nhưng chưa gửi được email.")
                 else:
                     status.update(label="Ghi dữ liệu thất bại!", state="error")
             else:
