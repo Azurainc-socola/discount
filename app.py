@@ -17,7 +17,7 @@ st.set_page_config(page_title="Azura Discount Calculator", page_icon="💰", lay
 # CẤU HÌNH KHÁCH HÀNG & HẰNG SỐ
 # ==========================================
 CLIENT_SHEETS = {
-    "UID": "DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
+    "UID": "1DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
     "JFT": "1KefQd0dt7R0sarZqVAlq0p-p00Bk9eQLl_uWNkAV78o",
     "Welast": "1zhzPVsrvGKOZeIuFe-6VszV50ZBzfeiB2TUaa6vxSQ4",
     "Husble": "1paJKBq8oAwOl-gAMUzFZ3JdkbEdv9b7fEnGQ-pbrzfo"
