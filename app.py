@@ -17,7 +17,7 @@ st.set_page_config(page_title="Azura Discount Calculator", page_icon="💰", lay
 # CẤU HÌNH KHÁCH HÀNG & HẰNG SỐ
 # ==========================================
 CLIENT_SHEETS = {
-    "UID": "1DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
+    "UID": "DKWytU7-ui_4CxentBZbEsJKu9DkImlLVi3OUM693o0",
     "JFT": "1KefQd0dt7R0sarZqVAlq0p-p00Bk9eQLl_uWNkAV78o",
     "Welast": "1zhzPVsrvGKOZeIuFe-6VszV50ZBzfeiB2TUaa6vxSQ4",
     "Husble": "1paJKBq8oAwOl-gAMUzFZ3JdkbEdv9b7fEnGQ-pbrzfo"
@@ -66,11 +66,8 @@ def get_product_discount_map(sh):
             if len(row) >= 2:
                 product_code = row[0].strip()
                 price_str = str(row[1]).strip()
-                
-                # Chỉ đưa vào Map nếu tên SP có tồn tại và Cột Giá KHÔNG bị để trống
                 if product_code and price_str != "":
-                    discount_price = parse_discount_price(price_str)
-                    discount_map[product_code] = discount_price
+                    discount_map[product_code] = parse_discount_price(price_str)
         return discount_map
     except Exception as e:
         st.error(f"❌ Lỗi khi đọc sheet {SHEET_PRODUCT_CODE}: {e}")
@@ -80,15 +77,12 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
     try:
         ws_invoice = sh.worksheet(invoice_number)
         header = ws_invoice.row_values(1)
-        try:
-            item_col_idx = header.index("Items")
-        except ValueError:
-            item_col_idx = 4
+        item_col_idx = header.index("Items") if "Items" in header else 4
             
         rows = ws_invoice.get_all_values()[1:]
         total_discount = 0.0
         item_counts = {}
-        missing_codes = set() # 💡 VIBECODER: Giỏ chứa các mã thiếu giá
+        missing_codes = set()
         
         item_pattern = re.compile(r'^(\d+)[xX](.+)$')
         
@@ -101,24 +95,20 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
                     qty = int(match.group(1))
                     product_code = match.group(2).strip()
                     
-                    # KIỂM TRA HARD STOP: Có trong bảng giá không?
                     if product_code not in discount_map:
                         missing_codes.add(product_code)
                     else:
                         price = discount_map.get(product_code, 0.0)
                         total_discount += (qty * price)
                     
-                    if product_code in item_counts:
-                        item_counts[product_code] += qty
-                    else:
-                        item_counts[product_code] = qty
+                    item_counts[product_code] = item_counts.get(product_code, 0) + qty
                         
         return total_discount, item_counts, missing_codes
     except gspread.exceptions.WorksheetNotFound:
-        st.error(f"❌ Không tìm thấy tab `{invoice_number}` trong Sheet của khách hàng này.")
+        st.error(f"❌ Không tìm thấy tab `{invoice_number}`.")
         return None, None, None
     except Exception as e:
-        st.error(f"❌ Lỗi khi xử lý tab `{invoice_number}`: {e}")
+        st.error(f"❌ Lỗi xử lý tab `{invoice_number}`: {e}")
         return None, None, None
 
 def write_total_discount(sh, invoice_number, total_discount, item_counts, discount_map):
@@ -133,56 +123,38 @@ def write_total_discount(sh, invoice_number, total_discount, item_counts, discou
             line_total = qty * unit_price
             total_qty += qty
             inv_val = invoice_number if is_first_row else ""
-            
-            rows_to_append.append([
-                inv_val, "", code, qty, f"${unit_price:.2f}", f"${line_total:.2f}"
-            ])
+            rows_to_append.append([inv_val, "", code, qty, f"${unit_price:.2f}", f"${line_total:.2f}"])
             is_first_row = False
             
         rows_to_append.append(["", f"${total_discount:.2f}", "TỔNG CỘNG", total_qty, "-", f"${total_discount:.2f}"])
         rows_to_append.append(["", "", "", "", "", ""]) 
         
-        ws_total.append_rows(rows_to_append)
+        # FIX LỆCH CỘT: Ép dải bảng bắt đầu từ A
+        ws_total.append_rows(rows_to_append, value_input_option="USER_ENTERED", table_range="A1")
         return len(rows_to_append)
     except Exception as e:
-        st.error(f"❌ Lỗi khi ghi vào sheet {SHEET_TOTAL_DISCOUNT}: {e}")
+        st.error(f"❌ Lỗi khi ghi vào sheet: {e}")
         return 0
 
 def send_alert_email(sender_email, sender_password, client_name, invoice_number, missing_codes, sheet_url):
-    """💡 VIBECODER: Hàm gửi email Báo Đỏ (Alert) khi thiếu Product Code"""
     try:
         codes_html = "".join([f"<li><b>{code}</b></li>" for code in missing_codes])
-
         html_content = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <html><body style="font-family: Arial, sans-serif; color: #333;">
             <h2 style="color: #E74C3C;">⚠️ CẢNH BÁO TỪ CHỐI GHI SỔ - {client_name}</h2>
-            <p>Hệ thống vừa <b>TỪ CHỐI</b> tính toán và ghi dữ liệu cho <b>Invoice {invoice_number}</b> do phát hiện dữ liệu không hợp lệ.</p>
-            
-            <div style="background-color: #FDEDEC; padding: 15px; border-left: 5px solid #E74C3C; margin-bottom: 20px;">
-                <h4 style="color: #C0392B; margin-top: 0;">📦 Các Product Code chưa có trong bảng giá (hoặc bị trống giá):</h4>
-                <ul>
-                    {codes_html}
-                </ul>
-                <p>Vui lòng bổ sung các mã này cùng đơn giá tương ứng vào tab <code>{SHEET_PRODUCT_CODE}</code> để hệ thống có thể tính toán chính xác.</p>
-                <p style="margin-top: 10px;">🔗 <b>Link truy cập cập nhật giá:</b> <a href="{sheet_url}" target="_blank">Mở Google Sheet</a></p>
+            <p>Hệ thống <b>TỪ CHỐI</b> Invoice <b>{invoice_number}</b> do thiếu đơn giá sản phẩm:</p>
+            <div style="background-color: #FDEDEC; padding: 15px; border-left: 5px solid #E74C3C;">
+                <ul>{codes_html}</ul>
+                <p>🔗 <b>Link cập nhật giá:</b> <a href="{sheet_url}">Mở Google Sheet</a></p>
             </div>
-            
-            <hr>
-            <p style="font-size: 11px; color: #7f8c8d;">
-                <i>Email tự động gửi bởi VibeCoder Assistant lúc {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}.</i>
-            </p>
-        </body>
-        </html>
+        </body></html>
         """
-
         msg = MIMEMultipart()
         msg['From'] = sender_email
         msg['To'] = FIXED_TO_EMAIL
         msg['Cc'] = FIXED_CC_EMAILS
         msg['Subject'] = f"[CẢNH BÁO] Thiếu Giá SP - Invoice {invoice_number} ({client_name})"
         msg.attach(MIMEText(html_content, 'html'))
-
         all_recipients = [FIXED_TO_EMAIL] + [e.strip() for e in FIXED_CC_EMAILS.split(',')]
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -190,49 +162,28 @@ def send_alert_email(sender_email, sender_password, client_name, invoice_number,
         server.sendmail(sender_email, all_recipients, msg.as_string())
         server.quit()
         return True
-    except Exception as e:
-        return False
+    except: return False
 
-def send_success_email(sender_email, sender_password, client_name, invoice_number, total_discount, item_counts, sheet_url, new_rows_count):
-    """Hàm gửi email thành công (Giữ nguyên)"""
+def send_success_email(sender_email, sender_password, client_name, invoice_number, total_discount, item_counts, sheet_url, new_rows):
     try:
-        items_html = ""
-        for code, qty in item_counts.items():
-            items_html += f"<li><b>{code}</b>: {qty} cái</li>"
-
+        items_html = "".join([f"<li><b>{code}</b>: {qty} cái</li>" for code, qty in item_counts.items()])
         html_content = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-            <h2 style="color: #2E86C1;">Báo Cáo Khấu Trừ Azura - Khách Hàng {client_name}</h2>
-            <p>Hệ thống vừa cập nhật dữ liệu thành công cho <b>Invoice {invoice_number}</b>.</p>
-            
-            <div style="background-color: #f9f9f9; padding: 15px; border-left: 5px solid #2E86C1; margin-bottom: 20px;">
-                <h3 style="color: #D35400; margin-top: 0;">💰 Tổng Discount: ${total_discount:.2f}</h3>
-                <p style="margin-bottom: 5px;">📍 <b>Vị trí ghi:</b> Tab <code>{SHEET_TOTAL_DISCOUNT}</code></p>
-                <p style="margin-bottom: 5px;">📝 <b>Số dòng mới:</b> {new_rows_count} dòng</p>
-                <p style="margin-top: 10px;">🔗 <b>Link truy cập Sheet:</b> <a href="{sheet_url}" target="_blank">Nhấn vào đây để xem chi tiết</a></p>
+        <html><body style="font-family: Arial, sans-serif; color: #333;">
+            <h2 style="color: #2E86C1;">Báo Cáo Khấu Trừ Azura - {client_name}</h2>
+            <div style="background-color: #f9f9f9; padding: 15px; border-left: 5px solid #2E86C1;">
+                <h3>💰 Tổng Discount: ${total_discount:.2f}</h3>
+                <p>📍 Tab: <code>{SHEET_TOTAL_DISCOUNT}</code> | 📝 Ghi mới: {new_rows} dòng</p>
+                <p>🔗 <a href="{sheet_url}">Nhấn vào đây để xem chi tiết trên Sheet</a></p>
             </div>
-            
-            <h4>📦 Chi tiết Items (Tổng hợp):</h4>
-            <ul>
-                {items_html}
-            </ul>
-            
-            <hr>
-            <p style="font-size: 11px; color: #7f8c8d;">
-                <i>Email tự động gửi bởi VibeCoder Assistant lúc {datetime.now().strftime('%H:%M:%S %d/%m/%Y')}.</i>
-            </p>
-        </body>
-        </html>
+            <h4>📦 Chi tiết:</h4><ul>{items_html}</ul>
+        </body></html>
         """
-
         msg = MIMEMultipart()
         msg['From'] = sender_email
         msg['To'] = FIXED_TO_EMAIL
         msg['Cc'] = FIXED_CC_EMAILS
         msg['Subject'] = f"[Azura] Invoice {invoice_number} - {client_name} - ${total_discount:.2f}"
         msg.attach(MIMEText(html_content, 'html'))
-
         all_recipients = [FIXED_TO_EMAIL] + [e.strip() for e in FIXED_CC_EMAILS.split(',')]
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -240,15 +191,13 @@ def send_success_email(sender_email, sender_password, client_name, invoice_numbe
         server.sendmail(sender_email, all_recipients, msg.as_string())
         server.quit()
         return True
-    except Exception as e:
-        return False
+    except: return False
 
 # ==========================================
-# UI & LUỒNG TƯƠNG TÁC CHÍNH
+# UI & LUỒNG CHÍNH
 # ==========================================
 def main():
     st.title("🚀 Azura Vibe - Cập Nhật Khấu Trừ")
-    st.markdown("Chọn Khách hàng và nhập số Invoice để tính toán và gửi báo cáo.")
     
     gc = authenticate_google_sheets()
 
@@ -258,110 +207,66 @@ def main():
             selected_client_name = st.selectbox("👥 Chọn Khách hàng:", options=list(CLIENT_SHEETS.keys()))
             invoice_number = st.text_input("👉 Nhập Invoice Number:", placeholder="Ví dụ: 412")
         with col2:
-            st.info(f"**📧 Email tự động gửi đến:**\n\n**To:** {FIXED_TO_EMAIL}\n\n**CC:** {FIXED_CC_EMAILS}")
-            st.markdown("<br>", unsafe_allow_html=True)
+            # 💡 VIBECODER UPDATE: OPTION GỬI EMAIL
+            is_send_email = st.checkbox("📩 Tự động gửi Email báo cáo", value=True)
+            st.info(f"**Người nhận:** {FIXED_TO_EMAIL}")
             submit_btn = st.form_submit_button("⚙️ Chạy Quy Trình", use_container_width=True)
 
     if submit_btn:
-        invoice_number = invoice_number.strip()
-        if not invoice_number:
+        inv_no = invoice_number.strip()
+        if not inv_no:
             st.warning("⚠️ Vui lòng nhập mã Invoice!")
             return
 
-        sheet_id = CLIENT_SHEETS[selected_client_name]
-        sheet_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit"
+        sid = CLIENT_SHEETS[selected_client_name]
+        s_url = f"https://docs.google.com/spreadsheets/d/{sid}/edit"
 
-        with st.status(f"Đang xử lý Invoice {invoice_number}...", expanded=True) as status:
+        with st.status(f"Đang xử lý Invoice {inv_no}...", expanded=True) as status:
             try:
-                sh = gc.open_by_key(sheet_id)
-            except Exception:
-                status.update(label="Lỗi kết nối Sheet!", state="error")
-                st.stop()
+                sh = gc.open_by_key(sid)
+            except:
+                status.update(label="Lỗi kết nối Sheet!", state="error"); st.stop()
 
-            # BƯỚC 1: KIỂM TRA TRÙNG LẶP INVOICE (Chống ghi đè)
-            st.write(f"🛡️ Đang kiểm tra lịch sử dữ liệu...")
+            # 1. KIỂM TRA TRÙNG
             try:
-                ws_total = sh.worksheet(SHEET_TOTAL_DISCOUNT)
-                existing_invoices = [str(val).strip() for val in ws_total.col_values(1)]
-                
-                if invoice_number in existing_invoices:
-                    status.update(label="Phát hiện trùng lặp!", state="error")
-                    st.error(f"❌ **CẢNH BÁO:** Invoice `{invoice_number}` đã được tính toán và ghi sổ trước đó!")
-                    st.warning("Hệ thống đã tự động dừng lại để tránh bị nhân đôi (Duplicate) tiền khấu trừ.")
-                    st.link_button(f"🔗 Mở Sheet kiểm tra lịch sử ({selected_client_name})", sheet_url)
-                    st.stop()
-            except gspread.exceptions.WorksheetNotFound:
-                pass
+                ws_t = sh.worksheet(SHEET_TOTAL_DISCOUNT)
+                if inv_no in [str(v).strip() for v in ws_t.col_values(1)]:
+                    status.update(label="Trùng lặp!", state="error")
+                    st.error(f"❌ Invoice `{inv_no}` đã tồn tại!"); st.link_button("Mở Sheet kiểm tra", s_url); st.stop()
+            except gspread.exceptions.WorksheetNotFound: pass
             
-            # BƯỚC 2: NẠP GIÁ
-            st.write(f"🔍 Đang nạp bảng giá từ `{SHEET_PRODUCT_CODE}`...")
-            discount_map = get_product_discount_map(sh)
-            if discount_map is None: return
+            # 2. NẠP GIÁ & TÍNH TOÁN
+            d_map = get_product_discount_map(sh)
+            total_d, i_counts, m_codes = calculate_invoice_discount(sh, inv_no, d_map)
             
-            # BƯỚC 3: TÍNH TOÁN & QUÉT LỖI THIẾU GIÁ
-            st.write(f"⚙️ Đang quét và đối chiếu giá từng sản phẩm...")
-            total_discount, item_counts, missing_codes = calculate_invoice_discount(sh, invoice_number, discount_map)
-            
-            if total_discount is not None:
-                # -------------------------------------------------------------
-                # 💡 VIBECODER UPDATE: XỬ LÝ LỖI KHI CÓ SẢN PHẨM THIẾU GIÁ
-                # -------------------------------------------------------------
-                if missing_codes:
-                    status.update(label="Từ chối ghi sổ do thiếu dữ liệu!", state="error")
-                    st.error(f"❌ **LỖI NGHIÊM TRỌNG:** Tạm dừng ghi sổ. Phát hiện **{len(missing_codes)} Mã Sản Phẩm** đang bị thiếu trong bảng giá (hoặc bị bỏ trống giá).")
-                    
-                    # Liệt kê trực quan các mã lỗi trên màn hình
-                    for code in missing_codes:
-                        st.markdown(f"🚩 `{code}`")
-                    
-                    st.warning("👉 **HƯỚNG XỬ LÝ:** Vui lòng bấm vào nút bên dưới, mở Google Sheet ra và thêm các mã sản phẩm này kèm theo giá vào tab `Productcode`. Sau đó quay lại đây bấm chạy tiếp.")
-                    st.link_button(f"🔗 Mở Sheet để bổ sung giá", sheet_url)
-                    
-                    # Gửi email báo lỗi (chạy ngầm)
-                    try:
-                        st.write("📩 Đang gửi email báo cáo sự cố...")
-                        sender_email = st.secrets["email_config"]["sender_email"]
-                        sender_password = st.secrets["email_config"]["app_password"]
-                        send_alert_email(sender_email, sender_password, selected_client_name, invoice_number, missing_codes, sheet_url)
-                        st.info("📧 Đã tự động gửi Email cảnh báo sự cố đến team Kế Toán.")
-                    except KeyError:
-                        pass
-                    
-                    st.stop() # NGẮT TOÀN BỘ TIẾN TRÌNH TẠI ĐÂY - BẢO VỆ DỮ LIỆU
-                # -------------------------------------------------------------
+            if total_d is not None:
+                # 3. KIỂM TRA THIẾU GIÁ (HARD STOP)
+                if m_codes:
+                    status.update(label="Thiếu dữ liệu giá!", state="error")
+                    st.error(f"❌ **LỖI:** Thiếu giá cho các mã: {', '.join(m_codes)}")
+                    if is_send_email:
+                        s_em = st.secrets["email_config"]["sender_email"]
+                        s_pw = st.secrets["email_config"]["app_password"]
+                        send_alert_email(s_em, s_pw, selected_client_name, inv_no, m_codes, s_url)
+                    st.link_button("Bổ sung giá ngay", s_url); st.stop()
 
-                # Nếu mọi thứ hợp lệ (không thiếu mã nào), tiến hành ghi sổ
-                st.write(f"📝 Dữ liệu hợp lệ. Đang ghi bảng chi tiết vào `{SHEET_TOTAL_DISCOUNT}`...")
-                new_rows_count = write_total_discount(sh, invoice_number, total_discount, item_counts, discount_map)
+                # 4. GHI SỔ
+                n_rows = write_total_discount(sh, inv_no, total_d, i_counts, d_map)
                 
-                if new_rows_count > 0:
-                    try:
-                        st.write(f"📩 Đang gửi email báo cáo thành công...")
-                        sender_email = st.secrets["email_config"]["sender_email"]
-                        sender_password = st.secrets["email_config"]["app_password"]
-                        
-                        email_sent = send_success_email(
-                            sender_email, sender_password, selected_client_name, 
-                            invoice_number, total_discount, item_counts, sheet_url, new_rows_count
-                        )
-                        
-                        if email_sent:
-                            status.update(label=f"Hoàn tất Invoice {invoice_number}!", state="complete", expanded=False)
-                            st.success(f"✅ Đã ghi thành công **{new_rows_count} dòng** vào tab `{SHEET_TOTAL_DISCOUNT}`!")
-                            st.link_button("🔗 Mở Google Sheet Kiểm Tra", sheet_url)
-                            
-                            st.markdown("---")
-                            table_data = []
-                            for code, qty in item_counts.items():
-                                up = discount_map.get(code, 0.0)
-                                table_data.append({"Mã SP": code, "Số Lượng": qty, "Đơn Giá": f"${up:.2f}", "Thành Tiền": f"${qty*up:.2f}"})
-                            df = pd.DataFrame(table_data)
-                            st.dataframe(df, use_container_width=True, hide_index=True)
-                            st.balloons()
-                    except KeyError:
-                        st.error("❌ Thiếu cấu hình [email_config] trong Secrets.")
-                else:
-                    status.update(label="Ghi dữ liệu thất bại!", state="error")
+                if n_rows > 0:
+                    if is_send_email:
+                        s_em = st.secrets["email_config"]["sender_email"]
+                        s_pw = st.secrets["email_config"]["app_password"]
+                        send_success_email(s_em, s_pw, selected_client_name, inv_no, total_d, i_counts, s_url, n_rows)
+                    
+                    status.update(label=f"Xong Invoice {inv_no}!", state="complete", expanded=False)
+                    st.success(f"✅ Đã ghi thành công vào `{selected_client_name}`")
+                    st.link_button("🔗 Mở Google Sheet", s_url)
+                    
+                    # Hiện bảng kê
+                    df = pd.DataFrame([{"Mã SP": c, "SL": q, "Đơn Giá": f"${d_map[c]:.2f}", "Thành Tiền": f"${q*d_map[c]:.2f}"} for c in i_counts])
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.balloons()
 
 if __name__ == "__main__":
     main()
