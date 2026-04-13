@@ -88,20 +88,28 @@ def calculate_invoice_discount(sh, invoice_number, discount_map):
         
         for row in rows:
             if len(row) > item_col_idx:
-                item_val = row[item_col_idx].strip()
-                if not item_val: continue
-                match = item_pattern.match(item_val)
-                if match:
-                    qty = int(match.group(1))
-                    product_code = match.group(2).strip()
+                raw_cell_value = row[item_col_idx].strip()
+                if not raw_cell_value: continue
+                
+                # [VIBECODER FIX]: Tách các sản phẩm bị gộp trong cùng 1 ô bằng dấu ; hoặc \n
+                items_in_cell = re.split(r'[;\n]', raw_cell_value)
+                
+                for item_val in items_in_cell:
+                    item_val = item_val.strip()
+                    if not item_val: continue
                     
-                    if product_code not in discount_map:
-                        missing_codes.add(product_code)
-                    else:
-                        price = discount_map.get(product_code, 0.0)
-                        total_discount += (qty * price)
-                    
-                    item_counts[product_code] = item_counts.get(product_code, 0) + qty
+                    match = item_pattern.match(item_val)
+                    if match:
+                        qty = int(match.group(1))
+                        product_code = match.group(2).strip()
+                        
+                        if product_code not in discount_map:
+                            missing_codes.add(product_code)
+                        else:
+                            price = discount_map.get(product_code, 0.0)
+                            total_discount += (qty * price)
+                        
+                        item_counts[product_code] = item_counts.get(product_code, 0) + qty
                         
         return total_discount, item_counts, missing_codes
     except gspread.exceptions.WorksheetNotFound:
